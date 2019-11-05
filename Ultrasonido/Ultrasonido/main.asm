@@ -22,12 +22,28 @@
 .DEF   ESTADO = r21
 .DEF   FLAG = r22
 .DEF   OVT = r23
-.DEF   DISTANCIA = r23
-
-
+.DEF   DISTANCIA = r24
 START:
+   	; Inicializar variables globales
+   	LDI      	FLAG, 0x00
+	LDI      	OVT, 0x00
+	LDI      	DISTANCIA, 0x00
+ 
+   	; Configuración de la Pila
+   	LDI      	r16, LOW(RAMEND)
+   	OUT      	SPL, r16
+   	LDI      	r16, HIGH(RAMEND)
+   	OUT      	SPH, r16
+ 
+   	; Configuración de interrupciones externas
+   	LDI      	r16, 0x01
+   	STS      	EICRA, r16 ; Activa int. en cualquier cambio de nivel lógico
+   	LDI      	r16, 0x01
+   	OUT      	EIMSK, r16 ; habilita INT0
+
+
 ;.......................................	
-;Configuración del Timer1
+;Configuración del Timer 1
 ;.......................................
    	LDI      	r16, 0x00 ; Normal Mode, WGM11:WGM10 = 00
    	STS      	TCCR1A, r16
@@ -41,7 +57,7 @@ START:
    	STS      	OCR1AL, r16 ; Apaga pin PB0 en 10us
 
 ;.......................................	
-;Configuración del Timer1
+;Configuración del Timer 2
 ;.......................................
    	LDI      	r16, 0b00000010 ; CTC Mode
    	STS      	TCCR2A, r16
@@ -55,16 +71,16 @@ START:
 ;.......................................	
 ;Configuración de Puertos
 ;.......................................
-	//RCALL		UART_CONFIG
+	RCALL		UART_CONFIG
 	LDI			ESTADO, 0x01
 	;Puerto D
-	LDI      	r16, 0x00 ; Define puertos B y D
+	LDI      	r16, 0x80 ; Define puertos B y D
    	OUT      	DDRD, r16
 	;Puerto B
    	LDI      	r17, 0x02
    	OUT      	DDRB, r17
-	clr			TMP
-	out			PORTD, TMP
+	//clr			TMP
+	//out			PORTB, TMP
 ;.......................................	
 ;Habilito interrupciones globales
 ;.......................................
@@ -73,7 +89,8 @@ START:
 ;MAIN
 ;.......................................
 	MAIN:
-	//RCALL		UART_TRANSMIT
+	
+	//RCALL		DELAY
 	RJMP		MAIN
 
 	
@@ -81,31 +98,46 @@ START:
 T1_COMPA:
 	; eleva el trigger
 	SBI PORTB, 1
-
+	
 	;Timer 2 en 10us
    	LDI      	r16, 0x01	;Prescaler 1
    	STS      	TCCR2B, r16
 	LDI      	r16, 0x0F
    	STS      	OCR2A, r16   ; Apaga pin PB0 en 10us
-
-	LDS			ESTADO, 0x01 ; Seteo estado en 1
+	LDI      	r16, 0x02	; Activa interrupcion por OCRA2
+   	STS      	TIMSK2, r16
+	; Reiniciar cuenta
+   	CLR      	r16
+   	STS      	TCNT1H, r16
+   	STS      	TCNT1L, r16
+	; Seteo estado en 1
+	LDi			ESTADO, 0x01 
 	
 
 	RETI
    	
 
 T2_COMPA:
-	CPI estado, 0x00
+	;SBI PORTD, 7
+
+	CPI estado, 0x02
 	BRNE Baja
+	SBI PORTD, 7
 	inc ovt
+	;RCALL		UART_TRANSMIT
 	RETI
 Baja:
 	CBI PORTB, 1
 	;Desactiva timer2
-	LDI      	r16, 0x00	;Prescaler 0
+	LDS			r16, TCCR2B
+	ANDI		r16, 0b11111000
    	STS      	TCCR2B, r16
+	LDI      	r16, 0x00	; Desctiva interrupcion por OCRA2
+   	STS      	TIMSK2, r16
 	reti
+	
 
+	
 INT_ECHO:
 	; Guarda Registros
    	PUSH		r16
@@ -114,26 +146,38 @@ INT_ECHO:
  
    	CPI      	FLAG, 0x00
    	BRNE     	FLANCO_BAJADA ;Salta a flanco de bajada cuando el echo regresa
+	SER      	FLAG
 	;Limpio OVT
-   	LDS			OVT, 0x00
-
+   	CLR			OVT
+	
 	;Modifico el timer 2 para cada centimetro
 	LDI      	r16, 0x01	;Prescaler 1
    	STS      	TCCR2B, r16
 	LDI      	r16, 0x3A
    	STS      	OCR2A, r16   ; Apaga pin PB0 en 10us
+	LDI      	r16, 0x02	; Activa interrupcion por OCRA2
+   	STS      	TIMSK2, r16
+	LDi			estado, 0x02; Seteo estado en 0
 
-	LDS			ESTADO, 0x00; Seteo estado en 0
-
+	; Reiniciar cuenta
+   	CLR      	r16
+   	STS      	TCNT1H, r16
+   	STS      	TCNT1L, r16
+	RETI
  
 FLANCO_BAJADA:
    	CLR      	FLAG
-   	; Guardar Distancia
-	MOV			DISTANCIA, OVT
-	; Desactiva interrupcion por OCA
-   	LDI      	r16, 0x02	
-   	STS      	TIMSK1, r16
-
+	; Guardar Distancia
+	//MOV			DISTANCIA, OVT
+	dec			ovt
+	RCALL		UART_TRANSMIT
+	
+	; Desactiva Timer 2
+	LDS			r16, TCCR2B
+	ANDI		r16, 0b11111000
+   	STS      	TCCR2B, r16
+   	LDI      	r16, 0x00	; Desctiva interrupcion por OCRA2
+	STS      	TIMSK2, r16
 
  SALIDA:
    	; Recupera Registros
@@ -142,9 +186,7 @@ FLANCO_BAJADA:
    	POP      	r16
    	RETI
  
- /*
-
- 	
+  
 UART_CONFIG:
 ; Configuracion del UART con un BaudRate de 9600 a 1MHz, se activa la interrupcion para el recepcion del uart. 
 ; Baud rate = 9600 @ 1MHz
@@ -169,6 +211,17 @@ UART_TRANSMIT:
 	lds r16, UCSR0A
 	sbrs r16, UDRE0
 	rjmp UART_TRANSMIT
-	sts UDR0, DISTANCIA
+	sts UDR0, OVT
 	ret
-	*/
+	
+DELAY:
+    ldi  r18, 6
+    ldi  r19, 19
+    ldi  r25, 174
+L1: dec  r25
+    brne L1
+    dec  r19
+    brne L1
+    dec  r18
+    brne L1
+    rjmp PC+1
